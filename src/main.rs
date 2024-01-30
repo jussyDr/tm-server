@@ -1,8 +1,15 @@
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::{
+    io::{Cursor, Read},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+};
 
+use byteorder::{LittleEndian, ReadBytesExt};
 use futures_util::{SinkExt, StreamExt};
 use tm_web_api::{Client, Server};
-use tokio::{net::TcpListener, spawn};
+use tokio::{
+    net::{TcpListener, UdpSocket},
+    spawn,
+};
 use tokio_util::codec::LengthDelimitedCodec;
 
 #[tokio::main]
@@ -35,6 +42,15 @@ async fn main() {
 
     let socket_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port));
     let tcp_listener = TcpListener::bind(socket_addr).await.unwrap();
+    let udp_socket = UdpSocket::bind(socket_addr).await.unwrap();
+
+    spawn(async move {
+        loop {
+            let mut buf = [0; 1024];
+            let (len, addr) = udp_socket.recv_from(&mut buf).await.unwrap();
+            println!("{:?} bytes received from {:?}", len, addr);
+        }
+    });
 
     loop {
         let (tcp_stream, _addr) = tcp_listener.accept().await.unwrap();
@@ -44,8 +60,29 @@ async fn main() {
                 .little_endian()
                 .new_framed(tcp_stream);
 
-            let _ = tcp_stream.next().await.unwrap().unwrap();
-            let _ = tcp_stream.next().await.unwrap().unwrap();
+            let message = tcp_stream.next().await.unwrap().unwrap();
+
+            let mut message_decoder = Cursor::new(message);
+            let client_magic = message_decoder.read_u16::<LittleEndian>().unwrap();
+            assert_eq!(client_magic, 0x0380);
+            let mut checksum = [0; 32];
+            message_decoder.read_exact(&mut checksum).unwrap();
+            let nine = message_decoder.read_u32::<LittleEndian>().unwrap();
+            assert_eq!(nine, 9);
+            let message_type = message_decoder.read_u8().unwrap();
+            assert_eq!(message_type, 7);
+
+            let message = tcp_stream.next().await.unwrap().unwrap();
+            let mut message_decoder = Cursor::new(message);
+            let client_magic = message_decoder.read_u16::<LittleEndian>().unwrap();
+            assert_eq!(client_magic, 0x0380);
+            let mut checksum = [0; 32];
+            message_decoder.read_exact(&mut checksum).unwrap();
+            let nine = message_decoder.read_u32::<LittleEndian>().unwrap();
+            assert_eq!(nine, 9);
+            let message_type = message_decoder.read_u8().unwrap();
+            assert_eq!(message_type, 6);
+            let _time = message_decoder.read_u32::<LittleEndian>().unwrap();
 
             let x = vec![
                 0x81, 0x03, 0xef, 0x09, 0xd0, 0xaf, 0x76, 0x62, 0x50, 0xe0, 0xd0, 0x82, 0x30, 0x4c,
@@ -107,11 +144,7 @@ async fn main() {
 
             tcp_stream.send(x.into()).await.unwrap();
 
-            println!("sent");
-
-            let x = tcp_stream.next().await;
-
-            println!("{x:?}");
+            tcp_stream.next().await;
         });
     }
 }
