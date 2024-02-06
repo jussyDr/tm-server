@@ -1,10 +1,10 @@
 use std::{
-    io::{Cursor, Seek, Write},
+    io::{Cursor, Seek},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
 };
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use futures_util::{SinkExt, StreamExt};
+use byteorder::{LittleEndian, ReadBytesExt};
+use futures_util::StreamExt;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tm_web_api::{Client, Server};
@@ -101,4 +101,105 @@ fn verify_message_mac(message: &mut [u8]) {
     let mut computed_mac = Hmac::<Sha256>::new_from_slice(&HMAC_SHA256_KEY).unwrap();
     computed_mac.update(message);
     computed_mac.verify(&mac.into()).unwrap();
+}
+
+fn compress_message(src: &[u8], _data: &[u8]) -> Vec<u8> {
+    let dst_len = 1 + (src.len() + 254 - 15) / 255 + src.len();
+    let mut dst = vec![0; dst_len];
+    let mut dst_pos = 0;
+
+    if src.len() >= 15 {
+        dst[dst_pos] = 0xf0;
+        dst_pos += 1;
+
+        let mut rem = src.len() - 15;
+
+        while rem >= 255 {
+            dst[dst_pos] = 255;
+            dst_pos += 1;
+            rem -= 255;
+        }
+
+        dst[dst_pos] = rem as u8;
+        dst_pos += 1;
+    } else {
+        dst[dst_pos] = (src.len() as u8) << 4;
+        dst_pos += 1;
+    }
+
+    for &value in src {
+        dst[dst_pos] = value;
+        dst_pos += 1;
+    }
+
+    dst
+}
+
+fn decompress_message(src: &[u8], dst: &mut [u8], data: &[u8]) {
+    let mut src_pos = 0;
+    let mut dst_pos = 0;
+
+    loop {
+        let instruction = src[src_pos];
+        src_pos += 1;
+
+        let mut literal_length = (instruction >> 4) as usize;
+
+        if literal_length == 15 {
+            loop {
+                let value = src[src_pos];
+                src_pos += 1;
+
+                literal_length += value as usize;
+
+                if value != 255 {
+                    break;
+                }
+            }
+        }
+
+        dst[dst_pos..dst_pos + literal_length]
+            .copy_from_slice(&src[src_pos..src_pos + literal_length]);
+        src_pos += literal_length;
+        dst_pos += literal_length;
+
+        if src_pos == src.len() {
+            break;
+        }
+
+        let match_distance =
+            u16::from_le_bytes(src[src_pos..src_pos + 2].try_into().unwrap()) as usize;
+        src_pos += 2;
+
+        let mut match_length = (instruction & 15) as usize;
+
+        if match_length == 15 {
+            loop {
+                let value = src[src_pos];
+                src_pos += 1;
+
+                match_length += value as usize;
+
+                if value != 255 {
+                    break;
+                }
+            }
+        }
+
+        if match_distance > dst_pos {
+            let data_match_pos = data.len() - (match_distance - dst_pos);
+
+            dst[dst_pos..dst_pos + match_length]
+                .copy_from_slice(&data[data_match_pos..data_match_pos + match_length]);
+            dst_pos += match_length;
+        } else {
+            let mut match_pos = dst_pos - match_distance;
+
+            for _ in 0..match_length {
+                dst[dst_pos] = dst[match_pos];
+                match_pos += 1;
+                dst_pos += 1;
+            }
+        }
+    }
 }
