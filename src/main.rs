@@ -1,10 +1,12 @@
+mod compression;
+
 use std::{
     io::Read,
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
 use anyhow::{bail, Result};
-use futures_util::TryStreamExt;
+use futures_util::{SinkExt, TryStreamExt};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tm_web_api::{DedicatedServerClient, ServerConfig};
@@ -63,11 +65,17 @@ async fn handle_connection(tcp_stream: TcpStream) -> Result<()> {
 
     let frame = tcp_stream.try_next().await?.unwrap();
     let payload = parse_frame(frame)?;
-    parse_payload(payload)?;
+    parse_message(payload)?;
 
     let frame = tcp_stream.try_next().await?.unwrap();
     let payload = parse_frame(frame)?;
-    parse_payload(payload)?;
+    parse_message(payload)?;
+
+    let frame = vec![];
+    tcp_stream.send(frame.into()).await?;
+
+    let frame = vec![];
+    tcp_stream.send(frame.into()).await?;
 
     while let Some(_frame) = tcp_stream.try_next().await? {}
 
@@ -101,8 +109,8 @@ fn parse_frame(mut frame: BytesMut) -> Result<BytesMut> {
     Ok(frame.split_off(34))
 }
 
-fn parse_payload(payload: BytesMut) -> Result<()> {
-    let mut reader = payload.reader();
+fn parse_message(message: BytesMut) -> Result<()> {
+    let mut reader = message.reader();
 
     if read_u32(&mut reader)? != 9 {
         bail!("invalid version");

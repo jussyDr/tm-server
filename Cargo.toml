@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.87"
+anyhow = "1.0.88"
 futures-util = { version = "0.3.30", features = ["sink"] }
 hmac = "0.12.1"
 sha2 = "0.10.8"
