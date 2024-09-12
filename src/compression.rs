@@ -1,26 +1,36 @@
+pub fn compress(src: &[u8]) -> Vec<u8> {
+    let mut dst = vec![];
+
+    if src.len() < 15 {
+        dst.push((src.len() as u8) << 4);
+    } else {
+        dst.push(15);
+
+        for _ in 0..(src.len() - 15) / 255 {
+            dst.push(255);
+        }
+
+        dst.push(((src.len() - 15) % 255) as u8);
+    }
+
+    dst
+}
+
 pub fn decompress(src: &[u8], dst: &mut [u8], dict: &[u8]) -> Result<usize, ()> {
     unsafe {
-        let src_len = src.len();
         let dst_len = dst.len();
-        let dict_len = dict.len();
-        let src = src.as_ptr() as *mut u8;
         let dst = dst.as_mut_ptr();
-        let dict = dict.as_ptr();
 
-        let src_end = src.byte_add(src_len);
         let dst_end = dst.byte_add(dst_len);
-        let dict_end = dict.byte_add(dict_len);
 
-        let mut cur_src;
-        let mut next_src;
+        let mut src_pos;
+        let mut next_src_pos;
         let mut cur_dst;
-        let mut instr;
-        let mut lit_len;
-        let mut extra_lit_len: isize;
+        let mut instruction;
+        let mut extra_literal_len;
         let mut next_dst;
-        let mut instr_copy;
-        let mut instr_2;
-        let mut instr_2_copy;
+        let mut instruction_copy;
+        let mut instruction_2;
         let mut match_off;
         let mut match_len;
         let mut local_40;
@@ -29,18 +39,11 @@ pub fn decompress(src: &[u8], dst: &mut [u8], dict: &[u8]) -> Result<usize, ()> 
         let mut stack_39;
         let mut stack_3c;
         let mut stack_3b;
-        let mut var_5;
-        let mut var_6;
-        let mut var_7;
-        let mut var_1;
-        let mut var_2;
-        let mut var_8;
 
         if dst_len == 0 {
             unimplemented!()
-        } else if src_len != 0 {
-            cur_src = src;
-            next_src = src;
+        } else if !src.is_empty() {
+            src_pos = 0;
             cur_dst = dst;
 
             if dst_len < 64 {
@@ -48,63 +51,62 @@ pub fn decompress(src: &[u8], dst: &mut [u8], dict: &[u8]) -> Result<usize, ()> 
             }
 
             loop {
-                instr = *cur_src;
-                next_src = cur_src.byte_add(1);
-                lit_len = (instr >> 4) as isize;
+                instruction = src[src_pos];
+                next_src_pos = src_pos + 1;
+                let literal_len = (instruction >> 4) as usize;
 
-                if lit_len == 15 {
-                    extra_lit_len = 0;
+                if literal_len == 15 {
+                    extra_literal_len = 0;
 
-                    if src_end.byte_sub(15) <= next_src {
+                    if src.len() - 15 <= next_src_pos {
                         unimplemented!()
                     }
 
                     loop {
-                        let value = *next_src;
-                        next_src = next_src.byte_add(1);
-                        extra_lit_len += value as isize;
+                        let amount = src[next_src_pos];
+                        next_src_pos += 1;
+                        extra_literal_len += amount as usize;
 
-                        if src_end.byte_sub(15) < next_src {
+                        if src.len() - 15 < next_src_pos {
                             unimplemented!()
                         }
 
-                        if value == 255 {
-                            continue;
-                        } else {
+                        if amount != 255 {
                             break;
                         }
                     }
 
-                    if extra_lit_len == -1 {
+                    if extra_literal_len == usize::MAX {
                         unimplemented!()
                     }
 
-                    lit_len = extra_lit_len + 15;
-                    next_dst = cur_dst.byte_offset(lit_len);
+                    let literal_len = extra_literal_len + 15;
+                    next_dst = cur_dst.byte_add(literal_len);
 
                     if next_dst < cur_dst {
                         unimplemented!()
                     } else {
-                        cur_src = next_src.byte_offset(lit_len);
+                        src_pos = next_src_pos + literal_len;
 
-                        if cur_src < next_src {
+                        if src_pos < next_src_pos {
                             unimplemented!()
                         }
                     }
 
-                    instr_copy = instr as u32;
+                    instruction_copy = instruction as u32;
 
                     if dst_end.byte_sub(4) < next_dst {
                         //// LAB 400 ////
 
                         if dst_end.byte_sub(12) < next_dst
-                            || src_end.byte_sub(8) < next_src.byte_offset(lit_len)
+                            || src.len() - 8 < next_src_pos + literal_len
                         {
-                            if next_src.byte_offset(lit_len) == src_end && next_dst <= dst_end {
-                                cur_dst.copy_from(next_src, lit_len as usize);
+                            if next_src_pos + literal_len == src.len() && next_dst <= dst_end {
+                                cur_dst.copy_from(src.as_ptr().byte_add(next_src_pos), literal_len);
 
                                 return Ok(
-                                    ((cur_dst as i32) + ((lit_len as i32) - (dst as i32))) as usize
+                                    ((cur_dst as i32) + ((literal_len as i32) - (dst as i32)))
+                                        as usize,
                                 );
                             }
 
@@ -114,76 +116,78 @@ pub fn decompress(src: &[u8], dst: &mut [u8], dict: &[u8]) -> Result<usize, ()> 
                         unimplemented!()
                     }
 
-                    instr_copy = instr as u32;
+                    instruction_copy = instruction as u32;
 
-                    if src_end.byte_sub(32) < cur_src {
+                    if src.len() - 32 < src_pos {
                         unimplemented!()
                     }
 
-                    extra_lit_len = (cur_dst as isize) - (next_src as isize);
+                    let dst_src_distance =
+                        (cur_dst as isize) - (src.as_ptr().byte_add(next_src_pos) as isize);
 
                     loop {
-                        var_1 = next_src.byte_add(32);
-                        var_2 = var_1.byte_offset(extra_lit_len - 32);
-                        var_2.copy_from(next_src, 32);
-                        next_src = var_1;
+                        src.as_ptr()
+                            .cast_mut()
+                            .byte_add(next_src_pos)
+                            .byte_offset(dst_src_distance)
+                            .copy_from(src.as_ptr().byte_add(next_src_pos), 32);
+                        next_src_pos += 32;
 
-                        if var_1.byte_offset(extra_lit_len) < next_dst {
-                            continue;
-                        } else {
+                        if src
+                            .as_ptr()
+                            .byte_add(next_src_pos)
+                            .byte_offset(dst_src_distance)
+                            >= next_dst
+                        {
                             break;
                         }
                     }
                 } else {
-                    next_dst = cur_dst.byte_offset(lit_len);
-                    instr_copy = instr as u32;
+                    next_dst = cur_dst.byte_add(literal_len);
+                    instruction_copy = instruction as u32;
 
-                    if src_end.byte_sub(17) < next_src {
+                    if src.len() - 17 < next_src_pos {
                         unimplemented!()
                     }
 
-                    var_5 = cur_src.byte_add(5);
-                    var_6 = cur_src.byte_add(9);
-                    var_7 = cur_src.byte_add(13);
-                    cur_src = next_src.byte_offset(lit_len);
-                    cur_dst.copy_from(next_src, 4);
-                    (cur_dst.byte_add(4).copy_from(var_5, 4));
-                    (cur_dst.byte_add(8).copy_from(var_6, 4));
-                    (cur_dst.byte_add(12).copy_from(var_7, 4));
+                    src_pos = next_src_pos + literal_len;
+                    cur_dst.copy_from(src.as_ptr().byte_add(next_src_pos), 16);
                 }
 
-                instr_2 =
-                    u16::from_le_bytes(std::slice::from_raw_parts(cur_src, 2).try_into().unwrap());
-                instr_2_copy = instr_2 as usize;
-                match_off = next_dst.byte_sub(instr_2_copy);
-                next_src = cur_src.byte_add(2);
+                instruction_2 = u16::from_le_bytes(
+                    std::slice::from_raw_parts(src.as_ptr().byte_add(src_pos), 2)
+                        .try_into()
+                        .unwrap(),
+                ) as usize;
+                match_off = next_dst.byte_sub(instruction_2);
+                next_src_pos = src_pos + 2;
 
-                if instr & 15 == 15 {
-                    extra_lit_len = 0;
+                if instruction & 15 == 15 {
+                    extra_literal_len = 0;
 
                     loop {
-                        instr = *next_src;
-                        next_src = next_src.byte_add(1);
-                        extra_lit_len += instr as isize;
+                        instruction = src[next_src_pos];
+                        next_src_pos += 1;
+                        extra_literal_len += instruction as usize;
 
-                        if src_end.byte_sub(4) < next_src {
+                        if src.len() - 4 < next_src_pos {
                             unimplemented!()
                         }
 
-                        if instr != 255 {
+                        if instruction != 255 {
                             break;
                         }
                     }
 
-                    if extra_lit_len == -1 {
+                    if extra_literal_len == usize::MAX {
                         unimplemented!()
                     }
 
-                    match_len = extra_lit_len + 19;
-                    cur_dst = next_dst.byte_offset(match_len);
+                    match_len = extra_literal_len + 19;
+                    cur_dst = next_dst.byte_add(match_len);
 
                     if cur_dst < next_dst
-                        || (dict_len < 0x10000 && match_off.byte_add(dict_len) < dst)
+                        || (dict.len() < 0x10000 && match_off.byte_add(dict.len()) < dst)
                     {
                         unimplemented!()
                     }
@@ -192,16 +196,16 @@ pub fn decompress(src: &[u8], dst: &mut [u8], dict: &[u8]) -> Result<usize, ()> 
                         unimplemented!()
                     }
                 } else {
-                    match_len = ((instr & 15) + 4) as isize;
-                    cur_dst = next_dst.byte_offset(match_len);
+                    match_len = ((instruction & 15) + 4) as usize;
+                    cur_dst = next_dst.byte_add(match_len);
 
                     if dst_end.byte_sub(8) <= cur_dst {
                         unimplemented!()
                     }
 
-                    if match_off >= dst && instr_2_copy >= 8 {
+                    if match_off >= dst && instruction_2 >= 8 {
                         next_dst.copy_from(match_off, 18);
-                        cur_src = next_src;
+                        src_pos = next_src_pos;
 
                         continue;
                     }
@@ -209,24 +213,25 @@ pub fn decompress(src: &[u8], dst: &mut [u8], dict: &[u8]) -> Result<usize, ()> 
 
                 //// LAB 137 ////
 
-                if dict_len < 0x10000 && match_off.byte_add(dict_len) < dst {
+                if dict.len() < 0x10000 && match_off.byte_add(dict.len()) < dst {
                     unimplemented!()
                 }
 
-                cur_src = next_src;
+                src_pos = next_src_pos;
 
                 if dst <= match_off {
-                    if 15 < instr_2_copy {
-                        extra_lit_len = (next_dst as isize) - (match_off as isize);
+                    if 15 < instruction_2 {
+                        let match_distance = (next_dst as isize) - (match_off as isize);
 
                         loop {
                             next_dst = match_off;
-                            next_dst.byte_offset(extra_lit_len).copy_from(match_off, 32);
+                            next_dst
+                                .byte_offset(match_distance)
+                                .copy_from(match_off, 32);
                             next_dst = next_dst.byte_add(32);
-                            next_src = next_dst.byte_offset(extra_lit_len - 16);
                             match_off = next_dst;
 
-                            if next_dst.offset(extra_lit_len) < cur_dst {
+                            if next_dst.offset(match_distance) < cur_dst {
                                 continue;
                             } else {
                                 break;
@@ -236,9 +241,9 @@ pub fn decompress(src: &[u8], dst: &mut [u8], dict: &[u8]) -> Result<usize, ()> 
                         continue;
                     }
 
-                    if instr_2_copy == 1 {
+                    if instruction_2 == 1 {
                         unimplemented!()
-                    } else if instr_2_copy == 2 {
+                    } else if instruction_2 == 2 {
                         local_40 = (u16::from_le_bytes(
                             std::slice::from_raw_parts(match_off, 2).try_into().unwrap(),
                         ) & 0xff) as u8;
@@ -253,40 +258,39 @@ pub fn decompress(src: &[u8], dst: &mut [u8], dict: &[u8]) -> Result<usize, ()> 
                         unimplemented!()
                     }
 
-                    var_8 = u64::from_le_bytes([
+                    let var_8 = [
                         stack_39, stack_3a, stack_3b, stack_3c, stack_39, stack_3a, stack_3b,
                         stack_3c,
-                    ]);
+                    ];
 
-                    next_dst.copy_from(&var_8 as *const u64 as *const u8, 8);
+                    next_dst.copy_from(var_8.as_ptr(), 8);
                     next_dst = next_dst.byte_add(8);
-                    lit_len = (cur_dst as isize + (7 - next_dst as isize)) >> 3;
+                    let len = ((cur_dst as isize + (7 - next_dst as isize)) >> 3) as usize;
 
                     if cur_dst < next_dst {
                         unimplemented!()
                     }
 
-                    if lit_len != 0 {
-                        while lit_len != 0 {
-                            next_dst.copy_from(&var_8 as *const u64 as *const u8, 8);
-                            next_dst = next_dst.byte_add(8);
-
-                            lit_len -= 1;
-                        }
+                    for _ in 0..len {
+                        next_dst.copy_from(var_8.as_ptr(), 8);
+                        next_dst = next_dst.byte_add(8);
                     }
                 } else {
                     if dst_end.byte_sub(5) < cur_dst {
                         unimplemented!()
                     }
 
-                    lit_len = (dst as isize) - (match_off as isize);
+                    let match_distance = (dst as isize) - (match_off as isize);
 
-                    if lit_len < match_len {
+                    if match_distance < match_len as isize {
                         unimplemented!()
                     } else {
                         next_dst.copy_from(
-                            dict_end.byte_sub(dst as usize).byte_add(match_off as usize),
-                            match_len as usize,
+                            dict.as_ptr()
+                                .byte_add(dict.len())
+                                .byte_sub(dst as usize)
+                                .byte_add(match_off as usize),
+                            match_len,
                         );
                     }
                 }
