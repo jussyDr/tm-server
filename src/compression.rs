@@ -4,14 +4,19 @@ pub fn compress(src: &[u8]) -> Vec<u8> {
     if src.len() < 15 {
         dst.push((src.len() as u8) << 4);
     } else {
-        dst.push(15);
+        dst.push(15 << 4);
 
-        for _ in 0..(src.len() - 15) / 255 {
+        let mut rem_len = src.len() - 15;
+
+        while rem_len >= 255 {
             dst.push(255);
+            rem_len -= 255;
         }
 
-        dst.push(((src.len() - 15) % 255) as u8);
+        dst.push(rem_len as u8);
     }
+
+    dst.extend_from_slice(src);
 
     dst
 }
@@ -27,10 +32,8 @@ pub fn decompress(src: &[u8], dst: &mut [u8], dict: &[u8]) -> Result<usize, ()> 
         let mut next_src_pos;
         let mut cur_dst;
         let mut instruction;
-        let mut extra_literal_len;
         let mut next_dst;
-        let mut instruction_copy;
-        let mut instruction_2;
+        let mut match_distance;
         let mut match_off;
         let mut match_len;
         let mut local_40;
@@ -40,264 +43,266 @@ pub fn decompress(src: &[u8], dst: &mut [u8], dict: &[u8]) -> Result<usize, ()> 
         let mut stack_3c;
         let mut stack_3b;
 
-        if dst_len == 0 {
+        if dst_len == 0 && matches!(src, [0]) {
+            return Ok(0);
+        }
+
+        if src.is_empty() {
+            return Err(());
+        }
+
+        src_pos = 0;
+        cur_dst = dst;
+
+        if dst_len < 64 {
             unimplemented!()
-        } else if !src.is_empty() {
-            src_pos = 0;
-            cur_dst = dst;
+        }
 
-            if dst_len < 64 {
-                unimplemented!()
-            }
+        loop {
+            // copy literal
 
-            loop {
-                instruction = src[src_pos];
-                next_src_pos = src_pos + 1;
-                let literal_len = (instruction >> 4) as usize;
+            instruction = src[src_pos];
+            next_src_pos = src_pos + 1;
+            let literal_len = (instruction >> 4) as usize;
 
-                if literal_len == 15 {
-                    extra_literal_len = 0;
+            if literal_len == 15 {
+                // copy literal with len >= 15
 
-                    if src.len() - 15 <= next_src_pos {
-                        unimplemented!()
+                let mut extra_len = 0;
+
+                if src.len() - 15 <= next_src_pos {
+                    return Err(());
+                }
+
+                loop {
+                    let amount = src[next_src_pos];
+                    next_src_pos += 1;
+                    extra_len += amount as usize;
+
+                    if src.len() - 15 < next_src_pos {
+                        return Err(());
                     }
 
-                    loop {
-                        let amount = src[next_src_pos];
-                        next_src_pos += 1;
-                        extra_literal_len += amount as usize;
-
-                        if src.len() - 15 < next_src_pos {
-                            unimplemented!()
-                        }
-
-                        if amount != 255 {
-                            break;
-                        }
+                    if amount != 255 {
+                        break;
                     }
+                }
 
-                    if extra_literal_len == usize::MAX {
-                        unimplemented!()
-                    }
+                if extra_len == usize::MAX {
+                    return Err(());
+                }
 
-                    let literal_len = extra_literal_len + 15;
-                    next_dst = cur_dst.byte_add(literal_len);
+                let literal_len = extra_len + 15;
+                next_dst = cur_dst.byte_add(literal_len);
 
-                    if next_dst < cur_dst {
-                        unimplemented!()
-                    } else {
-                        src_pos = next_src_pos + literal_len;
-
-                        if src_pos < next_src_pos {
-                            unimplemented!()
-                        }
-                    }
-
-                    instruction_copy = instruction as u32;
-
-                    if dst_end.byte_sub(4) < next_dst {
-                        //// LAB 400 ////
-
-                        if dst_end.byte_sub(12) < next_dst
-                            || src.len() - 8 < next_src_pos + literal_len
-                        {
-                            if next_src_pos + literal_len == src.len() && next_dst <= dst_end {
-                                cur_dst.copy_from(src.as_ptr().byte_add(next_src_pos), literal_len);
-
-                                return Ok(
-                                    ((cur_dst as i32) + ((literal_len as i32) - (dst as i32)))
-                                        as usize,
-                                );
-                            }
-
-                            unimplemented!()
-                        }
-
-                        unimplemented!()
-                    }
-
-                    instruction_copy = instruction as u32;
-
-                    if src.len() - 32 < src_pos {
-                        unimplemented!()
-                    }
-
-                    let dst_src_distance =
-                        (cur_dst as isize) - (src.as_ptr().byte_add(next_src_pos) as isize);
-
-                    loop {
-                        src.as_ptr()
-                            .cast_mut()
-                            .byte_add(next_src_pos)
-                            .byte_offset(dst_src_distance)
-                            .copy_from(src.as_ptr().byte_add(next_src_pos), 32);
-                        next_src_pos += 32;
-
-                        if src
-                            .as_ptr()
-                            .byte_add(next_src_pos)
-                            .byte_offset(dst_src_distance)
-                            >= next_dst
-                        {
-                            break;
-                        }
-                    }
+                if next_dst < cur_dst {
+                    return Err(());
                 } else {
-                    next_dst = cur_dst.byte_add(literal_len);
-                    instruction_copy = instruction as u32;
-
-                    if src.len() - 17 < next_src_pos {
-                        unimplemented!()
-                    }
-
                     src_pos = next_src_pos + literal_len;
-                    cur_dst.copy_from(src.as_ptr().byte_add(next_src_pos), 16);
+
+                    if src_pos < next_src_pos {
+                        return Err(());
+                    }
                 }
 
-                instruction_2 = u16::from_le_bytes(
-                    std::slice::from_raw_parts(src.as_ptr().byte_add(src_pos), 2)
-                        .try_into()
-                        .unwrap(),
-                ) as usize;
-                match_off = next_dst.byte_sub(instruction_2);
-                next_src_pos = src_pos + 2;
+                if dst_end.byte_sub(4) < next_dst || src.len() - 32 < src_pos {
+                    //// LAB 400 ////
 
-                if instruction & 15 == 15 {
-                    extra_literal_len = 0;
-
-                    loop {
-                        instruction = src[next_src_pos];
-                        next_src_pos += 1;
-                        extra_literal_len += instruction as usize;
-
-                        if src.len() - 4 < next_src_pos {
-                            unimplemented!()
-                        }
-
-                        if instruction != 255 {
-                            break;
-                        }
-                    }
-
-                    if extra_literal_len == usize::MAX {
-                        unimplemented!()
-                    }
-
-                    match_len = extra_literal_len + 19;
-                    cur_dst = next_dst.byte_add(match_len);
-
-                    if cur_dst < next_dst
-                        || (dict.len() < 0x10000 && match_off.byte_add(dict.len()) < dst)
+                    if dst_end.byte_sub(12) < next_dst || src.len() - 8 < next_src_pos + literal_len
                     {
+                        if next_src_pos + literal_len == src.len() && next_dst <= dst_end {
+                            cur_dst.copy_from(src.as_ptr().byte_add(next_src_pos), literal_len);
+
+                            return Ok(
+                                ((cur_dst as i32) + ((literal_len as i32) - (dst as i32))) as usize
+                            );
+                        }
+
                         unimplemented!()
                     }
 
-                    if dst_end.byte_sub(8) <= cur_dst {
-                        unimplemented!()
-                    }
-                } else {
-                    match_len = ((instruction & 15) + 4) as usize;
-                    cur_dst = next_dst.byte_add(match_len);
-
-                    if dst_end.byte_sub(8) <= cur_dst {
-                        unimplemented!()
-                    }
-
-                    if match_off >= dst && instruction_2 >= 8 {
-                        next_dst.copy_from(match_off, 18);
-                        src_pos = next_src_pos;
-
-                        continue;
-                    }
-                }
-
-                //// LAB 137 ////
-
-                if dict.len() < 0x10000 && match_off.byte_add(dict.len()) < dst {
                     unimplemented!()
                 }
 
-                src_pos = next_src_pos;
+                let dst_src_distance =
+                    (cur_dst as isize) - (src.as_ptr().byte_add(next_src_pos) as isize);
 
-                if dst <= match_off {
-                    if 15 < instruction_2 {
-                        let match_distance = (next_dst as isize) - (match_off as isize);
+                loop {
+                    src.as_ptr()
+                        .cast_mut()
+                        .byte_add(next_src_pos)
+                        .byte_offset(dst_src_distance)
+                        .copy_from(src.as_ptr().byte_add(next_src_pos), 32);
+                    next_src_pos += 32;
 
-                        loop {
-                            next_dst = match_off;
-                            next_dst
-                                .byte_offset(match_distance)
-                                .copy_from(match_off, 32);
-                            next_dst = next_dst.byte_add(32);
-                            match_off = next_dst;
+                    if src
+                        .as_ptr()
+                        .byte_add(next_src_pos)
+                        .byte_offset(dst_src_distance)
+                        >= next_dst
+                    {
+                        break;
+                    }
+                }
+            } else {
+                // copy literal with len < 15
 
-                            if next_dst.offset(match_distance) < cur_dst {
-                                continue;
-                            } else {
-                                break;
-                            }
+                next_dst = cur_dst.byte_add(literal_len);
+
+                if next_src_pos >= src.len() - 17 {
+                    unimplemented!()
+                }
+
+                src_pos = next_src_pos + literal_len;
+                cur_dst.copy_from(src.as_ptr().byte_add(next_src_pos), 16);
+            }
+
+            // copy match
+
+            match_distance = u16::from_le_bytes(
+                std::slice::from_raw_parts(src.as_ptr().byte_add(src_pos), 2)
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            match_off = next_dst.byte_sub(match_distance);
+            next_src_pos = src_pos + 2;
+
+            // determine match len
+
+            if instruction & 15 == 15 {
+                let mut extra_len = 0;
+
+                loop {
+                    instruction = src[next_src_pos];
+                    next_src_pos += 1;
+                    extra_len += instruction as usize;
+
+                    if src.len() - 4 < next_src_pos {
+                        unimplemented!()
+                    }
+
+                    if instruction != 255 {
+                        break;
+                    }
+                }
+
+                if extra_len == usize::MAX {
+                    unimplemented!()
+                }
+
+                match_len = extra_len + 19;
+                cur_dst = next_dst.byte_add(match_len);
+
+                if cur_dst < next_dst
+                    || (dict.len() < 0x10000 && match_off.byte_add(dict.len()) < dst)
+                {
+                    unimplemented!()
+                }
+
+                if dst_end.byte_sub(8) <= cur_dst {
+                    unimplemented!()
+                }
+            } else {
+                match_len = ((instruction & 15) + 4) as usize;
+                cur_dst = next_dst.byte_add(match_len);
+
+                if dst_end.byte_sub(8) <= cur_dst {
+                    unimplemented!()
+                }
+
+                if match_off >= dst && match_distance >= 8 {
+                    next_dst.copy_from(match_off, 18);
+                    src_pos = next_src_pos;
+
+                    continue;
+                }
+            }
+
+            //// LAB 137 ////
+
+            if dict.len() < 0x10000 && match_off.byte_add(dict.len()) < dst {
+                unimplemented!()
+            }
+
+            src_pos = next_src_pos;
+
+            if dst <= match_off {
+                // copy match from dst
+
+                if 15 < match_distance {
+                    let match_distance_diff = (next_dst as isize) - (match_off as isize);
+
+                    loop {
+                        next_dst = match_off;
+                        next_dst
+                            .byte_offset(match_distance_diff)
+                            .copy_from(match_off, 32);
+                        next_dst = next_dst.byte_add(32);
+                        match_off = next_dst;
+
+                        if next_dst.offset(match_distance_diff) >= cur_dst {
+                            break;
                         }
-
-                        continue;
                     }
 
-                    if instruction_2 == 1 {
-                        unimplemented!()
-                    } else if instruction_2 == 2 {
-                        local_40 = (u16::from_le_bytes(
-                            std::slice::from_raw_parts(match_off, 2).try_into().unwrap(),
-                        ) & 0xff) as u8;
-                        stack_3f = (u16::from_le_bytes(
-                            std::slice::from_raw_parts(match_off, 2).try_into().unwrap(),
-                        ) >> 8) as u8;
-                        stack_3a = local_40;
-                        stack_39 = stack_3f;
-                        stack_3c = local_40;
-                        stack_3b = stack_3f;
-                    } else {
-                        unimplemented!()
-                    }
+                    continue;
+                }
 
-                    let var_8 = [
-                        stack_39, stack_3a, stack_3b, stack_3c, stack_39, stack_3a, stack_3b,
-                        stack_3c,
-                    ];
+                if match_distance == 1 {
+                    unimplemented!()
+                } else if match_distance == 2 {
+                    local_40 = (u16::from_le_bytes(
+                        std::slice::from_raw_parts(match_off, 2).try_into().unwrap(),
+                    ) & 0xff) as u8;
+                    stack_3f = (u16::from_le_bytes(
+                        std::slice::from_raw_parts(match_off, 2).try_into().unwrap(),
+                    ) >> 8) as u8;
+                    stack_3a = local_40;
+                    stack_39 = stack_3f;
+                    stack_3c = local_40;
+                    stack_3b = stack_3f;
+                } else {
+                    unimplemented!()
+                }
 
+                let var_8 = [
+                    stack_39, stack_3a, stack_3b, stack_3c, stack_39, stack_3a, stack_3b, stack_3c,
+                ];
+
+                next_dst.copy_from(var_8.as_ptr(), 8);
+                next_dst = next_dst.byte_add(8);
+                let len = ((cur_dst as isize + (7 - next_dst as isize)) >> 3) as usize;
+
+                if cur_dst < next_dst {
+                    unimplemented!()
+                }
+
+                for _ in 0..len {
                     next_dst.copy_from(var_8.as_ptr(), 8);
                     next_dst = next_dst.byte_add(8);
-                    let len = ((cur_dst as isize + (7 - next_dst as isize)) >> 3) as usize;
+                }
+            } else {
+                // copy match from dict
 
-                    if cur_dst < next_dst {
-                        unimplemented!()
-                    }
+                if dst_end.byte_sub(5) < cur_dst {
+                    unimplemented!()
+                }
 
-                    for _ in 0..len {
-                        next_dst.copy_from(var_8.as_ptr(), 8);
-                        next_dst = next_dst.byte_add(8);
-                    }
+                let match_distance_diff = (dst as isize) - (match_off as isize);
+
+                if match_distance_diff < match_len as isize {
+                    unimplemented!()
                 } else {
-                    if dst_end.byte_sub(5) < cur_dst {
-                        unimplemented!()
-                    }
-
-                    let match_distance = (dst as isize) - (match_off as isize);
-
-                    if match_distance < match_len as isize {
-                        unimplemented!()
-                    } else {
-                        next_dst.copy_from(
-                            dict.as_ptr()
-                                .byte_add(dict.len())
-                                .byte_sub(dst as usize)
-                                .byte_add(match_off as usize),
-                            match_len,
-                        );
-                    }
+                    next_dst.copy_from(
+                        dict.as_ptr()
+                            .byte_add(dict.len())
+                            .byte_sub(dst as usize)
+                            .byte_add(match_off as usize),
+                        match_len,
+                    );
                 }
             }
         }
-
-        unimplemented!()
     }
 }
 

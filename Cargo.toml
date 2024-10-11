@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.88"
-futures-util = { version = "0.3.30", features = ["sink"] }
+anyhow = "1.0.89"
+futures-util = { version = "0.3.31", features = ["sink"] }
+gamebox = { git = "https://github.com/jussyDr/gamebox" }
 hmac = "0.12.1"
 sha2 = "0.10.8"
-tm-web-api = { path = "../tm-web-api" }
+tm-web-api = { git = "https://github.com/jussyDr/tm-web-api" }
 tokio = { version = "1.40.0", features = ["macros", "net", "rt-multi-thread"] }
 tokio-util = { version = "0.7.12", features = ["codec"] }
 tracing = "0.1.40"
